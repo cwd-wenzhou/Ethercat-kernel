@@ -1,9 +1,15 @@
-obj-m := hello.o
-KERNEL_DIR := /usr/src/linux-headers-5.4.0-80-generic
+LIBS = /opt/etherlab/lib/libethercat.a -lrt -lpthread -lm
+ifneq ($(KERNELRELEASE),)
+obj-m :=hello.o $(LIBS)
+drv-objs := hello.o  /opt/etherlab/lib/libethercat.a
+else
+KERNEL_DIR :=/lib/modules/$(shell uname -r)/build
+
 PWD :=$(shell pwd)
 all: modules
 
 modules:
 	make -C $(KERNEL_DIR) M=$(PWD) modules
 clean:
-	make -C $(KERNEL_DIR) M=$(PWD) clean
+	rm -f *.ko *.o *.mod.o *.mod.c *.symvers *.order
+endif
