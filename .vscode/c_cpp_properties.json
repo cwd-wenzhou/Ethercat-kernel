@@ -4,16 +4,17 @@
             "name": "Linux",
             "includePath": [
                 "${default}",
-                "/home/imc/Documents/src/linux-4.19.37/**",
-                "/home/imc/Documents/src/linux-4.19.37/arch/alpha/include",
-                "/home/imc/Documents/src/linux-4.19.37/arch/x86/include",
-                "/home/imc/Documents/src/linux-4.19.37/include/uapi",
-                "${workspaceFolder}/sharedmem"
+                "/home/imc/Documents/src/linux-4.19.37/include",
+                "/usr/local/include/**",
+                "${workspaceFolder}/**",
+                "/lib/modules/4.19.37-rt19/build",
+                "/home/imc/Documents/src/linux-4.19.37/arch/**",
+                "/home/imc/Documents/src/linux-4.19.37/usr/include"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/gcc",
             "cStandard": "gnu11",
-            "cppStandard": "gnu++14",
+            "cppStandard": "c++98",
             "intelliSenseMode": "linux-gcc-x64"
         }
     ],

@@ -2,6 +2,7 @@
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/cdev.h>
+#include <sys/types.h>
 static int minor = 0;
 static dev_t devno;
 static struct cdev cdev;
