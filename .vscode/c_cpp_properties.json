@@ -1,0 +1,21 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${default}",
+                "/home/imc/Documents/src/linux-4.19.37/**",
+                "/home/imc/Documents/src/linux-4.19.37/arch/alpha/include",
+                "/home/imc/Documents/src/linux-4.19.37/arch/x86/include",
+                "/home/imc/Documents/src/linux-4.19.37/include/uapi",
+                "${workspaceFolder}/sharedmem"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "gnu11",
+            "cppStandard": "gnu++14",
+            "intelliSenseMode": "linux-gcc-x64"
+        }
+    ],
+    "version": 4
+}

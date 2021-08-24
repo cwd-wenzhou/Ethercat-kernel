@@ -1,6 +1,6 @@
 ifneq ($(KERNELRELEASE),)
-obj-m :=hello.o $(LIBS)
-drv-objs := hello.o 
+obj-m :=demo_chardev.o $(LIBS)
+drv-objs := demo_chardev.o 
 else
 KERNEL_DIR :=/lib/modules/$(shell uname -r)/build
 
