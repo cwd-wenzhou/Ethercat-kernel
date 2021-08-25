@@ -26,8 +26,6 @@ struct mem_dev *mem_devp; /*设备结构体指针*/
 
 struct cdev cdev;
 
-static char str[16] = "cwd is in e308";
-
 static struct class *demo_class; 
 
 #define TAG "sharemem:  "
@@ -53,6 +51,7 @@ int mem_release(struct inode *inode, struct file *filp)
 {
   return 0;
 }
+
 static int memdev_mmap(struct file* filp, struct vm_area_struct *vma)
 {
   struct mem_dev *dev = filp->private_data; /*获得设备结构体指针*/
@@ -82,7 +81,7 @@ static int memdev_init(void)
   int i;
   dev_t devno = MKDEV(mem_major, 0);
   struct device *demo_device;
-  printk("%s started\n",TAG);
+  printk("%sstarted\n",TAG);
   /* 静态申请设备号*/
   if (mem_major)
     result = register_chrdev_region(devno, 2, "memdev");
@@ -97,13 +96,10 @@ static int memdev_init(void)
     return result;
   }
     
-
   /*初始化cdev结构*/
   cdev_init(&cdev, &mem_fops);
   cdev.owner = THIS_MODULE;
   cdev.ops = &mem_fops;
- 
-  
   
   /*创建设备类*/  
   demo_class = class_create(THIS_MODULE,"demo_class");  
@@ -140,9 +136,10 @@ static int memdev_init(void)
     mem_devp[i].data = kmalloc(MEMDEV_SIZE, GFP_KERNEL);
     memset(mem_devp[i].data, 0, MEMDEV_SIZE);
   } 
+
   strcpy(mem_devp[0].data,"cwd is in e308");
-  mem_devp[1].data="imc";
-  printk("%smalloc finished;data=%s\n",TAG,mem_devp[0].data);
+  strcpy(mem_devp[1].data,"cwd is in c412");
+  printk("%smalloc finished;\n",TAG);
 
   return 0;
   device_err:   
@@ -161,8 +158,8 @@ static int memdev_init(void)
 static void memdev_exit(void)
 {
   int i;
-  printk("%scheck if mmap func runs fine,data=%s\n",TAG,mem_devp[0].data);
-  printk("%s EXIT\n",TAG);
+  printk("%scheck if mmap func runs fine,mem_devp[0].data=%s\n",TAG,mem_devp[0].data);
+  printk("%sEXIT\n",TAG);
   cdev_del(&cdev);   /*注销设备*/
   kfree(mem_devp);     /*释放设备结构体内存*/
   unregister_chrdev_region(MKDEV(mem_major, 0), 2); /*释放设备号*/

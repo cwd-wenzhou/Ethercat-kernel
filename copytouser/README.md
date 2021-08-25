@@ -15,7 +15,10 @@ ls
 #gcc main.c -o main
 切换到root用户
 #su root
-#./main
+root@imc:/home/imc/Documents/code/kernel-ethercat/sharedmem# ./user 
+buf 1 = cwd is in e308
+start 1 = cwd is in e308
+buf 2 = cwd in house!
 可以看到文件被成功打开。且write和read的回调函数正确使用
 
 与chardevice的区别是文件是自动注册的
