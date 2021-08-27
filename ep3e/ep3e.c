@@ -26,6 +26,21 @@
  *  industrial property and similar rights of Beckhoff Automation GmbH.
  *
  *****************************************************************************/
+#include <linux/types.h>
+#include <linux/fs.h>
+#include <linux/errno.h>
+
+#include <linux/mm_types.h>
+#include <linux/sched.h>
+#include <linux/init.h>
+#include <linux/cdev.h>
+#include <asm/io.h>
+//#include <asm/system.h>
+#include <linux/slab.h>
+#include <asm/uaccess.h>
+#include <linux/kernel.h>
+#include <linux/mm.h>
+#include <linux/uaccess.h>
 
 #include <linux/version.h>
 #include <linux/module.h>
@@ -44,7 +59,8 @@
 #endif
 
 #include "../../include/ecrt.h" // EtherCAT realtime interface
-
+#include "ep3e.h"
+#include "memdevice.h"
 /*****************************************************************************/
 
 // Module parameters
@@ -56,7 +72,7 @@
 #define EXTERNAL_MEMORY 0
 #define SDO_ACCESS      0
 #define VOE_ACCESS      0
-
+#define DEVICE_CREATE   1
 #define PFX "ec_ep3e: "
 
 /*****************************************************************************/
@@ -80,99 +96,81 @@ static struct timer_list timer;
 // process data
 static uint8_t *domain1_pd; // process data memory
 
-//从站配置所用的参数
-#define EP3ESLAVEPOS 0, i               //迈信伺服EP3E在ethercat总线上的位置
-#define MAXSINE 0x000007DD, 0x00000001  // EP3E的厂家标识和产品标识
-
-//电机配置需要的参数
-#define TASK_FREQUENCY 4000        //*Hz* 任务周期
-#define ENCODER_RESOLUTION 131072  //编码器分辨率
-#define HOME_VECOLITY 5            // r/s，回零速度
-#define HOME_STEP HOME_VECOLITY *ENCODER_RESOLUTION / TASK_FREQUENCY  // pulse 回零步长
-#define POSITION_STEP 1 / TASK_FREQUENCY  //位置模式下步长
-#define Pi 3.141592654                    //圆周率
-
-// CoE对象字典
-#define RXPDO 0x1600
-#define TXPDO 0x1A00
-/*CiA 402数据对象(Data Object)*/
-#define CTRL_WORD 0x6040         //控制字的数据对象
-#define OPERATION_MODE 0x6060    //设定运行模式的数据对象
-#define TARGET_VELOCITY 0x60FF   //目标速度的数据对象
-#define TARGET_POSITION 0x607A   //目标位置的数据对象
-#define STATUS_WORD 0x6041       //状态字的数据对象
-#define MODE_DISPLAY 0x6061      //当前运行模式的数据对象
-#define CURRENT_VELOCITY 0x606C  //当前速度的数据对象
-#define CURRENT_POSITION 0x6064  //当前位置的数据对象
-
-
-enum DRIVERSTATE {
-    dsNotReadyToSwitchOn = 0,  //初始化 未完成状态
-    dsSwitchOnDisabled,        //初始化 完成状态
-    dsReadyToSwitchOn,         //主电路电源OFF状态
-    dsSwitchedOn,              //伺服OFF/伺服准备
-    dsOperationEnabled,        //伺服ON
-    dsQuickStopActive,         //即停止
-    dsFaultReactionActive,     //异常（报警）判断
-    dsFault                    //异常（报警）状态
-};
-
-//迈信伺服驱动器里PDO入口的偏移量
-/*我们需要定义一些变量去关联需要用到的从站的PD0对象*/
-struct DRIVERVARIABLE {
-    unsigned int operation_mode;   //设定运行模式
-    unsigned int ctrl_word;        //控制字
-    unsigned int target_velocity;  //目标速度 （pulse/s)
-    unsigned int target_postion;   //目标位置 （pulse）
-
-    unsigned int status_word;       //状态字
-    unsigned int mode_display;      //实际运行模式
-    unsigned int current_velocity;  //当前速度 （pulse/s）
-    unsigned int current_postion;   //当前位置 （pulse）
-};
-
-//迈信伺服电机结构体
-struct MOTOR {
-
-    ec_slave_config_t *slave;  //从站配置，这里只有一台迈信伺服
-    ec_slave_config_state_t slave_state;  //从站配置状态
-
-    uint8_t *domain_pd;                     // Process Data
-    struct DRIVERVARIABLE drive_variables;  //从站驱动器变量
-
-    int32_t targetPosition;   //电机的目标位置
-    int8_t opModeSet;         //电机运行模式的设定值,默认位置模式
-    int8_t opmode;            //驱动器当前运行模式
-    int32_t currentVelocity;  //电机当前运行速度
-    int32_t currentPosition;  //电机当前位置
-    uint16_t status;          //驱动器状态字
-
-    enum DRIVERSTATE driveState;  //驱动器状态
-};
-
-//填充相关PDOS信息
-ec_pdo_entry_info_t EP3E_pdo_entries[] = {/*RxPdo 0x1600*/
-                                            {CTRL_WORD, 0x00, 16},
-                                            {OPERATION_MODE, 0x00, 8},
-                                            {TARGET_VELOCITY, 0x00, 32},
-                                            {TARGET_POSITION, 0x00, 32},
-                                            /*TxPdo 0x1A00*/
-                                            {STATUS_WORD, 0x00, 16},
-                                            {MODE_DISPLAY, 0x00, 8},
-                                            {CURRENT_VELOCITY, 0x00, 32},
-                                            {CURRENT_POSITION, 0x00, 32}};
-ec_pdo_info_t EP3E_pdos[] = {// RxPdo
-                                {RXPDO, 4, EP3E_pdo_entries + 0},
-                                // TxPdo
-                                {TXPDO, 4, EP3E_pdo_entries + 4}};
-ec_sync_info_t EP3E_syncs[] = {{0, EC_DIR_OUTPUT, 0, NULL, EC_WD_DISABLE},
-                                {1, EC_DIR_INPUT, 0, NULL, EC_WD_DISABLE},
-                                {2, EC_DIR_OUTPUT, 1, EP3E_pdos + 0, EC_WD_DISABLE},
-                                {3, EC_DIR_INPUT, 1, EP3E_pdos + 1, EC_WD_DISABLE},
-                                {0xFF}};
-
 static struct MOTOR motors[4];
 /*****************************************************************************/
+
+/*****************************************************************************/
+/******************************device create*****************************************/
+static int mem_major = MEMDEV_MAJOR;
+
+module_param(mem_major, int, S_IRUGO);//insmod sharedmem mem_major=5  这样就可从命令行传参数进来。若没有指定则使用上一行的默认值
+
+struct mem_dev *mem_devp; /*设备结构体指针*/
+struct cdev cdev;
+static struct class *demo_class; 
+
+/*文件打开函数*/
+int mem_open(struct inode *inode, struct file *filp)
+{
+    struct mem_dev *dev;
+    
+    /*获取次设备号*/
+    int num = MINOR(inode->i_rdev);
+    if (num >= MEMDEV_MAX_DEVS)
+            return -ENODEV;
+    dev = &mem_devp[num];
+    /*将设备描述结构指针赋值给文件私有数据指针*/
+    filp->private_data = dev;
+    printk(KERN_INFO PFX "mem_open RUN.data.str=%s\n",dev->data->str);
+    return 0;
+}
+
+/*文件释放函数*/
+int mem_release(struct inode *inode, struct file *filp)
+{
+  printk(KERN_INFO PFX "mem_release RUN.\n");
+  return 0;
+}
+
+
+ssize_t mem_read(struct file *file, char __user *buf,size_t count, loff_t *offset)
+{
+  printk(KERN_INFO PFX "mem_read RUN.\n");
+  return 0;
+}
+
+ssize_t mem_write(struct file *file, const char __user *buf, size_t count, loff_t *offset)
+{
+  printk(KERN_INFO PFX "mem_write RUN.\n");
+  return 0;
+}
+
+static int memdev_mmap(struct file* filp, struct vm_area_struct *vma)
+{
+  struct mem_dev *dev = filp->private_data; /*获得设备结构体指针*/
+  printk(KERN_INFO PFX "memdev_mmap RUN.\n");
+  vma->vm_flags |= VM_IO;
+  vma->vm_flags |= (VM_DONTEXPAND | VM_DONTDUMP);
+  if (remap_pfn_range(vma,vma->vm_start,virt_to_phys(dev->data)>>PAGE_SHIFT, vma->vm_end - vma->vm_start, vma->vm_page_prot))
+      return  -EAGAIN;
+  printk(KERN_INFO PFX "mmap func runs fine,str=%s targetposition=%d\n",dev->data->str,dev->data->targetPosition);
+  return 0;
+}
+
+/*文件操作结构体*/
+static const struct file_operations mem_fops =
+{
+  .owner = THIS_MODULE,
+  .open = mem_open,
+  .release = mem_release,
+  .read = mem_read,
+  .write = mem_write,
+  .mmap = memdev_mmap,
+};
+
+/*****************************************************************************/
+
+
 
 #if SDO_ACCESS
 static ec_sdo_request_t *sdo;
@@ -369,11 +367,12 @@ void receive_callback(void *cb_data)
 
 /*****************************************************************************/
 
-int __init init_mini_module(void)
+int init_mini_module(void)
 {
     int ret = -1;
     int i;
-
+    dev_t devno = MKDEV(mem_major, 0);
+    struct device *demo_device;
 #if CONFIGURE_PDOS
     //ec_slave_config_t *sc;
 #endif
@@ -483,6 +482,71 @@ int __init init_mini_module(void)
     domain1_pd = ecrt_domain_data(domain1);
 #endif
 
+
+#if DEVICE_CREATE
+    slaves_num=4;
+      /* 静态申请设备号*/
+  if (mem_major)
+    ret = register_chrdev_region(devno, slaves_num, "memshare");
+  else  /* 动态分配设备号 */
+  {
+    ret = alloc_chrdev_region(&devno, 0, slaves_num, "memshare");
+    mem_major = MAJOR(devno);
+    
+  } 
+ 
+  if (ret < 0){
+    printk("chrdev failed\n");
+    return ret;
+  }
+    
+  /*初始化cdev结构*/
+  cdev_init(&cdev, &mem_fops);
+  cdev.owner = THIS_MODULE;
+  cdev.ops = &mem_fops;
+  
+  /*创建设备类*/  
+  demo_class = class_create(THIS_MODULE,"demo_class");  
+  if(IS_ERR(demo_class)){  
+    ret =  PTR_ERR(demo_class);  
+    goto class_err;  
+  }  
+
+  /*创建设备文件，通知用户在“/dev/”目录下创件名字为demoX的设备文件*/  
+  for(i=0; i<slaves_num; i++){ //最多可创建255个设备节点(register_chrdev函数会申请0-254范围的从设备号)  
+    /* 注册字符设备 */
+    cdev_add(&cdev, MKDEV(mem_major, i), 1);
+    demo_device = device_create(demo_class,NULL, MKDEV(mem_major, i), NULL,"etcdevice%d",i);  
+    if(IS_ERR(demo_device)){  
+      ret = PTR_ERR(demo_device);  
+      goto device_err;  
+    }  
+  }      
+
+  /* 为设备描述结构分配内存*/
+  mem_devp = kmalloc(slaves_num * sizeof(struct mem_dev), GFP_KERNEL);
+  
+  if (!mem_devp)    /*申请失败*/
+  {
+    ret =  - ENOMEM;
+    goto fail_malloc;
+  }
+  memset(mem_devp, 0, sizeof(struct mem_dev));
+
+  /*为设备分配内存*/
+  for (i=0; i < slaves_num; i++)
+  {
+    mem_devp[i].size = MEMDEV_SIZE;
+    mem_devp[i].data = kmalloc(MEMDEV_SIZE, GFP_KERNEL);
+    memset(mem_devp[i].data, 0, MEMDEV_SIZE);
+  } 
+
+  strcpy(mem_devp[0].data->str,"cwd is in e308");
+  mem_devp[0].data->targetPosition = 1234;
+  strcpy(mem_devp[1].data->str,"cwd is in c412");
+  printk(KERN_INFO PFX "malloc finished.\n");  
+#endif
+
     printk(KERN_INFO PFX "Starting cyclic sample thread.\n");
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
     timer_setup(&timer, cyclic_task, 0);
@@ -500,9 +564,17 @@ int __init init_mini_module(void)
 out_free_process_data:
     kfree(domain1_pd);
 #endif
+device_err:   
+    while(i--) //设备节点创建的回滚操作 device_destroy(demo_class,MKDEV(major, i));   
+        class_destroy(demo_class); //删除设备类   
+class_err:   
+    unregister_chrdev(mem_major, "demo_chrdev");  
+fail_malloc:
+    printk("fail_malloc\n");
+    unregister_chrdev_region(devno, 1);
 out_release_master:
     printk(KERN_ERR PFX "Releasing master...\n");
-    ecrt_release_master(master);
+    //ecrt_release_master(master);
 out_return:
     printk(KERN_ERR PFX "Failed to load. Aborting.\n");
     return ret;
@@ -512,8 +584,17 @@ out_return:
 
 void __exit cleanup_mini_module(void)
 {
+    
+    int i;
+    //printk("%scheck if mmap func runs fine,mem_devp[0].data=%s\n",TAG,mem_devp[0].data->str);
     printk(KERN_INFO PFX "Stopping...\n");
-
+    cdev_del(&cdev);   /*注销设备*/
+    kfree(mem_devp);     /*释放设备结构体内存*/
+    unregister_chrdev_region(MKDEV(mem_major, 0), slaves_num); /*释放设备号*/
+    /*删除设备节点和设备类*/  
+    for(i=0; i<slaves_num; i++)  
+      device_destroy(demo_class,MKDEV(mem_major, i));  
+    class_destroy(demo_class);  
     del_timer_sync(&timer);
 
 #if EXTERNAL_MEMORY
