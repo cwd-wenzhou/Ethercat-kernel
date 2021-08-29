@@ -1,5 +1,6 @@
 {
     "files.associations": {
-        "memdevice.h": "c"
+        "memdevice.h": "c",
+        "fcntl.h": "c"
     }
 }

@@ -56,17 +56,25 @@ struct DRIVERVARIABLE {
 //迈信伺服电机结构体
 struct MOTOR {
     int targetPosition;   //电机的目标位置
+    int targetVelocity;   //电机的目标位置
     int opModeSet;         //电机运行模式的设定值,默认位置模式
     int opmode;            //驱动器当前运行模式
     int currentVelocity;  //电机当前运行速度
     int currentPosition;  //电机当前位置
     int status;          //驱动器状态字
+
+    bool powerBusy;       //使能标志位
+    bool resetBusy;       //复位标志位
+    bool quickStopBusy;   //急停标志位
+    bool homeBusy;        //回零标志位
+    bool positionMoving;  //位置模式下运动
+
     char str[20];//for test
 
     ec_slave_config_t *slave;  //从站配置，这里只有一台迈信伺服
     ec_slave_config_state_t slave_state;  //从站配置状态
 
-    uint8_t *domain_pd;                     // Process Data
+    //uint8_t *domain_pd;                     // Process Data
     struct DRIVERVARIABLE drive_variables;  //从站驱动器变量
     enum DRIVERSTATE driveState;  //驱动器状态
     

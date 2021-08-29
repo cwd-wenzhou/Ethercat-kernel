@@ -32,7 +32,7 @@ struct TEST {
 /*mem设备描述结构体*/
 struct mem_dev                                    
 {                                                       
-  struct TEST *data;                     
+  struct MOTOR *data;                     
   unsigned long size;      
 };
 
