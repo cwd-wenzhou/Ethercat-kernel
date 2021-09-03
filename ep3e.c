@@ -44,10 +44,10 @@
 
 #include <linux/version.h>
 #include <linux/module.h>
-#include <linux/delay.h>
+
 #include <linux/timer.h>
 #include <linux/hrtimer.h>
-#include <linux/kthread.h>
+
 #include <linux/interrupt.h>
 #include <linux/err.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 34)
@@ -65,7 +65,6 @@
 #include "memdevice.h"
 /*****************************************************************************/
 
-#define CPU_NUM 2
 
 // Optional features
 #define CONFIGURE_PDOS  1
@@ -96,13 +95,11 @@ double ep3e_t;
 // Timer
 // 报文周期
 #define FREQUENCY 1000;
-#define NSECS 200000//单位纳秒
 //#define SECS 0  
-int running;
-//struct hrtimer hrtimer_timer;
-static struct task_struct *k;
-ktime_t cyctime;
-//ktime_t nowtime_kt;
+#define NSECS 200000//单位纳秒
+struct hrtimer hrtimer_timer;
+ktime_t cyctime_kt;
+ktime_t nowtime_kt;
 #define CLOCK_TYPE CLOCK_REALTIME
 /*****************************************************************************/
 
@@ -305,116 +302,108 @@ void read_voe(void)
 
 /*****************************************************************************/
 
-int cyclic_task(void *arg)
+static enum hrtimer_restart cyclic_task(struct hrtimer *timer)
 {
     int i;
-    while (running){
-        // send process data
+    // send process data
+    down(&master_sem);
+    ecrt_domain_queue(domain1);
+    ecrt_master_send(master);
+    up(&master_sem);
+    // restart timer
+    //printk(KERN_INFO PFX"interval: %ld - %ld = %ld us\r\n",timer->base->get_time()/1000,nowtime_kt/1000,(timer->base->get_time()-nowtime_kt)/1000);
+    //nowtime_kt =timer->base->get_time();
+    hrtimer_forward(timer,timer->base->get_time(), cyctime_kt);
+    //printk(KERN_INFO PFX "The process is \"%s\" pid %i\n",current->comm,current->pid);
+    //hrtimer_forward(timer,nowtime_kt, cyctime_kt);
+    //nowtime_kt = ktime_add(nowtime_kt,cyctime_kt);
+    // receive process data
+    down(&master_sem);
+    ecrt_master_receive(master);
+    ecrt_domain_process(domain1);
+    up(&master_sem);
 
-        // restart timer
-        //printk(KERN_INFO PFX"interval: %ld - %ld = %ld us\r\n",timer->base->get_time()/1000,nowtime_kt/1000,(timer->base->get_time()-nowtime_kt)/1000);
-        //nowtime_kt =timer->base->get_time();
-        //hrtimer_forward(timer,timer->base->get_time(), cyctime_kt);
-        //printk(KERN_INFO PFX "The process is \"%s\" pid %i\n",current->comm,current->pid);
-        //hrtimer_forward(timer,nowtime_kt, cyctime_kt);
-        //nowtime_kt = ktime_add(nowtime_kt,cyctime_kt);
-        // receive process data
-        down(&master_sem);
-        ecrt_master_receive(master);
-        ecrt_domain_process(domain1);
-        up(&master_sem);
+    // check process data state (optional)
+    check_domain1_state(domain1,&domain1_state);
 
-        // check process data state (optional)
-        check_domain1_state(domain1,&domain1_state);
+    if (counter) {
+        counter--;
+    } else { // do this at 1 Hz
+        counter = FREQUENCY;
 
-        if (counter) {
-            counter--;
-        } else { // do this at 1 Hz
-            counter = FREQUENCY;
+        // calculate new process data
+        blink = !blink;
 
-            // calculate new process data
-            blink = !blink;
+        // check for master state (optional)
+        check_master_state();
 
-            // check for master state (optional)
-            check_master_state();
+        // check for islave configuration state(s) (optional)
+        //check_slave_config_states();
 
-            // check for islave configuration state(s) (optional)
-            //check_slave_config_states();
+#if SDO_ACCESS
+        // read process data SDO
+        read_sdo();
+#endif
 
-    #if SDO_ACCESS
-            // read process data SDO
-            read_sdo();
-    #endif
+#if VOE_ACCESS
+        read_voe();
+#endif
+    }
 
-    #if VOE_ACCESS
-            read_voe();
-    #endif
-        }
+    for (i=0;i<slaves_num;i++){
+        mem_devp[i].data->status = EC_READ_U16(domain1_pd+mem_devp[i].data->drive_variables.status_word);
+        mem_devp[i].data->opmode = EC_READ_U8(domain1_pd+mem_devp[i].data->drive_variables.mode_display);
+        mem_devp[i].data->currentVelocity = EC_READ_S32(domain1_pd+mem_devp[i].data->drive_variables.current_velocity);
+        mem_devp[i].data->currentPosition = EC_READ_S32(domain1_pd+mem_devp[i].data->drive_variables.current_postion);
 
-        for (i=0;i<slaves_num;i++){
-            mem_devp[i].data->status = EC_READ_U16(domain1_pd+mem_devp[i].data->drive_variables.status_word);
-            mem_devp[i].data->opmode = EC_READ_U8(domain1_pd+mem_devp[i].data->drive_variables.mode_display);
-            mem_devp[i].data->currentVelocity = EC_READ_S32(domain1_pd+mem_devp[i].data->drive_variables.current_velocity);
-            mem_devp[i].data->currentPosition = EC_READ_S32(domain1_pd+mem_devp[i].data->drive_variables.current_postion);
+        if((mem_devp[i].data->status & 0x004F) == 0x0000)
+            mem_devp[i].data->driveState = dsNotReadyToSwitchOn;  //初始化 未完成状态
+        else if((mem_devp[i].data->status & 0x004F) == 0x0040)
+            mem_devp[i].data->driveState = dsSwitchOnDisabled;  //初始化 完成状态
+        else if((mem_devp[i].data->status & 0x006F) == 0x0021)
+            mem_devp[i].data->driveState = dsReadyToSwitchOn;  //主电路电源OFF状态
+        else if((mem_devp[i].data->status & 0x006F) == 0x0023)
+            mem_devp[i].data->driveState = dsSwitchedOn;  //伺服OFF/伺服准备
+        else if((mem_devp[i].data->status & 0x006F) == 0x0027)
+            mem_devp[i].data->driveState = dsOperationEnabled;  //伺服ON
+        else if((mem_devp[i].data->status & 0x006F) == 0x0007)
+            mem_devp[i].data->driveState = dsQuickStopActive;  //即停止
+        else if((mem_devp[i].data->status & 0x004F) == 0x000F)
+            mem_devp[i].data->driveState = dsFaultReactionActive;  //异常（报警）判断
+        else if((mem_devp[i].data->status & 0x004F) == 0x0008)
+            mem_devp[i].data->driveState = dsFault;  //异常（报警）状态
 
-            if((mem_devp[i].data->status & 0x004F) == 0x0000)
-                mem_devp[i].data->driveState = dsNotReadyToSwitchOn;  //初始化 未完成状态
-            else if((mem_devp[i].data->status & 0x004F) == 0x0040)
-                mem_devp[i].data->driveState = dsSwitchOnDisabled;  //初始化 完成状态
-            else if((mem_devp[i].data->status & 0x006F) == 0x0021)
-                mem_devp[i].data->driveState = dsReadyToSwitchOn;  //主电路电源OFF状态
-            else if((mem_devp[i].data->status & 0x006F) == 0x0023)
-                mem_devp[i].data->driveState = dsSwitchedOn;  //伺服OFF/伺服准备
-            else if((mem_devp[i].data->status & 0x006F) == 0x0027)
-                mem_devp[i].data->driveState = dsOperationEnabled;  //伺服ON
-            else if((mem_devp[i].data->status & 0x006F) == 0x0007)
-                mem_devp[i].data->driveState = dsQuickStopActive;  //即停止
-            else if((mem_devp[i].data->status & 0x004F) == 0x000F)
-                mem_devp[i].data->driveState = dsFaultReactionActive;  //异常（报警）判断
-            else if((mem_devp[i].data->status & 0x004F) == 0x0008)
-                mem_devp[i].data->driveState = dsFault;  //异常（报警）状态
+        if(mem_devp[i].data->powerBusy == true) {
+            switch(mem_devp[i].data->driveState) {
+                case dsNotReadyToSwitchOn:
+                    break;
 
-            if(mem_devp[i].data->powerBusy == true) {
-                switch(mem_devp[i].data->driveState) {
-                    case dsNotReadyToSwitchOn:
-                        break;
+                case dsSwitchOnDisabled:
+                    //设置运行模式
+                    EC_WRITE_S8(domain1_pd + mem_devp[i].data->drive_variables.operation_mode,mem_devp[i].data->opModeSet);
+                    EC_WRITE_U16(domain1_pd + mem_devp[i].data->drive_variables.ctrl_word,0x0006);
+                    break;
 
-                    case dsSwitchOnDisabled:
-                        //设置运行模式
-                        EC_WRITE_S8(domain1_pd + mem_devp[i].data->drive_variables.operation_mode,mem_devp[i].data->opModeSet);
-                        EC_WRITE_U16(domain1_pd + mem_devp[i].data->drive_variables.ctrl_word,0x0006);
-                        break;
+                case dsReadyToSwitchOn:
+                    EC_WRITE_U16(domain1_pd + mem_devp[i].data->drive_variables.ctrl_word,0x0007);
+                    break;
 
-                    case dsReadyToSwitchOn:
-                        EC_WRITE_U16(domain1_pd + mem_devp[i].data->drive_variables.ctrl_word,0x0007);
-                        break;
-
-                    case dsSwitchedOn:
-                        EC_WRITE_U16(domain1_pd + mem_devp[i].data->drive_variables.ctrl_word,0x000f);  // enable operation
-                        mem_devp[i].data->targetPosition = mem_devp[i].data->currentPosition;  //将当前位置复制给目标位置，防止使能后电机震动
-                        EC_WRITE_S32(domain1_pd + mem_devp[i].data->drive_variables.target_postion, mem_devp[i].data->targetPosition);
-                        break;
-                    default:
-                        mem_devp[i].data->powerBusy = false;
-                }
-            }
-            mem_devp[i].data->targetVelocity=ENCODER_RESOLUTION/2/Pi*5;
-            if(mem_devp[i].data->driveState == dsOperationEnabled && mem_devp[i].data->resetBusy == 0 &&
-                mem_devp[i].data->powerBusy == 0 && mem_devp[i].data->quickStopBusy == 0) {
-                if(mem_devp[i].data->opmode == 9) {  //速度模式
-                    EC_WRITE_S32(domain1_pd + mem_devp[i].data->drive_variables.target_velocity,mem_devp[i].data->targetVelocity);
-                }
+                case dsSwitchedOn:
+                    EC_WRITE_U16(domain1_pd + mem_devp[i].data->drive_variables.ctrl_word,0x000f);  // enable operation
+                    mem_devp[i].data->targetPosition = mem_devp[i].data->currentPosition;  //将当前位置复制给目标位置，防止使能后电机震动
+                    EC_WRITE_S32(domain1_pd + mem_devp[i].data->drive_variables.target_postion, mem_devp[i].data->targetPosition);
+                    break;
+                default:
+                    mem_devp[i].data->powerBusy = false;
             }
         }
-       
-
-        down(&master_sem);
-        ecrt_domain_queue(domain1);
-        ecrt_master_send(master);
-        up(&master_sem);
-        //udelay(200);
-        set_current_state(TASK_UNINTERRUPTIBLE);
-        schedule_hrtimeout_range(&cyctime,0,HRTIMER_MODE_REL_PINNED_HARD);
+        mem_devp[i].data->targetVelocity=ENCODER_RESOLUTION/2/Pi*5;
+        if(mem_devp[i].data->driveState == dsOperationEnabled && mem_devp[i].data->resetBusy == 0 &&
+            mem_devp[i].data->powerBusy == 0 && mem_devp[i].data->quickStopBusy == 0) {
+            if(mem_devp[i].data->opmode == 9) {  //速度模式
+                EC_WRITE_S32(domain1_pd + mem_devp[i].data->drive_variables.target_velocity,mem_devp[i].data->targetVelocity);
+            }
+        }
     }
 
 
@@ -630,31 +619,19 @@ int  init_mini_module(void)
 #endif
 
     printk(KERN_INFO PFX "Starting cyclic sample thread.\n");
-
-    //cyctime_kt  = ktime_set(0,NSECS);
-    //hrtimer_init(&hrtimer_timer,CLOCK_TYPE,HRTIMER_MODE_REL_PINNED_HARD);
-    //hrtimer_timer.function = cyclic_task;
+    cyctime_kt  = ktime_set(0,NSECS);
+    hrtimer_init(&hrtimer_timer,CLOCK_TYPE,HRTIMER_MODE_REL_PINNED_HARD);
+    hrtimer_timer.function = cyclic_task;
     //nowtime_kt = hrtimer_timer.base->get_time();
     //nowtime_kt = ktime_add(nowtime_kt,cyctime_kt);
-    //hrtimer_start(&hrtimer_timer,cyctime_kt,HRTIMER_MODE_REL_PINNED_HARD);
-    running =1;
-    cyctime = ktime_set(0,180000);
-    k = kthread_create(cyclic_task, NULL, "cwd_thread");
-    //k = kthread_create_on_node(cyclic_task, NULL, cpu_to_node(CPU_NUM), "cwd_thread");
-    if (IS_ERR(k))
-		return -1;
-    kthread_bind(k, CPU_NUM);
-    printk(KERN_INFO PFX "kthread_create!\n"); 
-    
-    printk(KERN_INFO PFX "create ktrhead ok! pid=%d\n",k->pid); 
+    hrtimer_start(&hrtimer_timer,cyctime_kt,HRTIMER_MODE_REL_PINNED_HARD);
 
     printk(KERN_INFO PFX "Started.\n");
     // receive process data
-    // down(&master_sem);
-    // ecrt_master_receive(master);
-    // ecrt_domain_process(domain1);
-    // up(&master_sem);
-    wake_up_process(k);
+    down(&master_sem);
+    ecrt_master_receive(master);
+    ecrt_domain_process(domain1);
+    up(&master_sem);
     return 0;
 
 #if EXTERNAL_MEMORY
@@ -683,10 +660,8 @@ void __exit cleanup_mini_module(void)
 {
     
     int i;    
-    //printk(KERN_INFO PFX "cancel timer...\n");
-    running = 0;
-    kthread_stop(k);  
-    //hrtimer_cancel(&hrtimer_timer);
+    printk(KERN_INFO PFX "cancel timer...\n");
+    hrtimer_cancel(&hrtimer_timer);
     //printk("%scheck if mmap func runs fine,mem_devp[0].data=%s\n",TAG,mem_devp[0].data->str);
     printk(KERN_INFO PFX "Stopping...\n");
     cdev_del(&cdev);   /*注销设备*/

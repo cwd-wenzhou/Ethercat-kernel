@@ -46,7 +46,7 @@
 #  industrial property and similar rights of Beckhoff Automation GmbH.
 #
 #------------------------------------------------------------------------------
-
+CONFIG_MODULE_SIG=n
 am__is_gnu_make = { \
   if test -z '$(MAKELEVEL)'; then \
     false; \

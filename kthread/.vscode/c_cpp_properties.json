@@ -4,16 +4,14 @@
             "name": "Linux",
             "includePath": [
                 "${default}",
-                "/home/imc/Documents/src/linux-4.19.37/include",
-                "/usr/local/include/**",
-                "${workspaceFolder}/**",
-                "/lib/modules/4.19.37-rt19/build",
+                "/usr/include",
                 "/home/imc/Documents/src/linux-4.19.37/**",
+                "/home/imc/Documents/src/linux-4.19.37/include/*"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/gcc",
             "cStandard": "gnu11",
-            "cppStandard": "c++98",
+            "cppStandard": "gnu++14",
             "intelliSenseMode": "linux-gcc-x64"
         }
     ],
